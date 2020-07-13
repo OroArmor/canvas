@@ -66,6 +66,7 @@ public class BuiltRenderRegion {
 	private final boolean isBottom;
 	private final boolean isTop;
 	private final BuiltRenderRegion[] neighbors = new BuiltRenderRegion[6];
+	private final TerrainOccluder terrainOccluder;
 	private DrawableChunk translucentDrawable = DrawableChunk.EMPTY_DRAWABLE;
 	private DrawableChunk solidDrawable = DrawableChunk.EMPTY_DRAWABLE;
 	private int frustumVersion;
@@ -86,6 +87,7 @@ public class BuiltRenderRegion {
 
 	public BuiltRenderRegion(CanvasWorldRenderer cwr, RegionChunkReference chunkRef, long packedPos) {
 		this.cwr = cwr;
+		terrainOccluder = cwr.terrainOccluder;
 		renderRegionBuilder = cwr.regionBuilder();
 		storage = cwr.regionStorage();
 		chunkReference = chunkRef;
@@ -119,6 +121,10 @@ public class BuiltRenderRegion {
 			frustumResult = result;
 			return result;
 		}
+	}
+
+	public boolean wasRecentlySeen() {
+		return frameIndex - lastSeenFrameIndex < 4 && occluderResult;
 	}
 
 	/**
@@ -263,7 +269,7 @@ public class BuiltRenderRegion {
 			final int[] oldData = buildData.getAndSet(chunkData).occlusionData;
 
 			if (oldData != null && oldData != OcclusionRegion.EMPTY_CULL_DATA) {
-				TerrainOccluder.invalidate();
+				terrainOccluder.invalidate();
 			}
 
 			// Even if empty the chunk may still be needed for visibility search to progress
@@ -332,7 +338,7 @@ public class BuiltRenderRegion {
 			final int[] oldData = buildData.getAndSet(chunkData).occlusionData;
 
 			if (oldData != null && !Arrays.equals(oldData, chunkData.occlusionData)) {
-				TerrainOccluder.invalidate(occluderVersion);
+				terrainOccluder.invalidate(occluderVersion);
 			}
 
 			cwr.forceVisibilityUpdate();
@@ -514,7 +520,7 @@ public class BuiltRenderRegion {
 			final int[] oldData = buildData.getAndSet(regionData).occlusionData;
 
 			if (oldData != null && oldData != OcclusionRegion.EMPTY_CULL_DATA) {
-				TerrainOccluder.invalidate(occluderVersion);
+				terrainOccluder.invalidate(occluderVersion);
 			}
 
 			renderData.set(regionData);
@@ -530,7 +536,7 @@ public class BuiltRenderRegion {
 		final int[] oldData = buildData.getAndSet(regionData).occlusionData;
 
 		if (oldData != null && !Arrays.equals(oldData, regionData.occlusionData)) {
-			TerrainOccluder.invalidate(occluderVersion);
+			terrainOccluder.invalidate(occluderVersion);
 		}
 
 		cwr.forceVisibilityUpdate();

@@ -57,6 +57,7 @@ import net.minecraft.util.Util;
 import net.minecraft.util.hit.BlockHitResult;
 import net.minecraft.util.hit.HitResult;
 import net.minecraft.util.math.BlockPos;
+import net.minecraft.util.math.Box;
 import net.minecraft.util.math.MathHelper;
 import net.minecraft.util.math.Matrix4f;
 import net.minecraft.util.math.Vec3d;
@@ -66,6 +67,9 @@ import grondag.canvas.Configurator;
 import grondag.canvas.buffer.BindStateManager;
 import grondag.canvas.buffer.VboBuffer;
 import grondag.canvas.compat.ClothHolder;
+import grondag.canvas.compat.LitematicaHolder;
+import grondag.canvas.compat.MaliLibHolder;
+import grondag.canvas.compat.SatinHolder;
 import grondag.canvas.light.LightmapHdTexture;
 import grondag.canvas.mixinterface.WorldRendererExt;
 import grondag.canvas.pipeline.BufferDebug;
@@ -81,19 +85,17 @@ import grondag.canvas.terrain.occlusion.region.OcclusionRegion;
 import grondag.canvas.terrain.occlusion.region.PackedBox;
 import grondag.canvas.terrain.render.TerrainIterator;
 import grondag.canvas.terrain.render.TerrainLayerRenderer;
+import grondag.canvas.texture.DitherTexture;
 import grondag.canvas.varia.CanvasGlHelper;
 import grondag.fermion.sc.unordered.SimpleUnorderedArrayList;
 
 public class CanvasWorldRenderer {
-	private static CanvasWorldRenderer instance;
-
-	public static final int MAX_REGION_COUNT = (32 * 2 + 1) * (32 * 2 + 1) * 16;
-
 	private boolean terrainSetupOffThread = Configurator.terrainSetupOffThread;
 	private int playerLightmap = 0;
 	private RenderRegionBuilder regionBuilder;
 	private final RenderRegionStorage renderRegionStorage = new RenderRegionStorage(this);
-	private final TerrainIterator terrainIterator = new TerrainIterator(renderRegionStorage);
+	public final TerrainOccluder terrainOccluder = new TerrainOccluder();
+	private final TerrainIterator terrainIterator = new TerrainIterator(this);
 	private final CanvasFrustum frustum = new CanvasFrustum();
 	private int translucentSortPositionVersion;
 	private int viewVersion;
@@ -144,7 +146,7 @@ public class CanvasWorldRenderer {
 		regionsToRebuild.clear();
 		regionBuilder.reset();
 		renderRegionStorage.clear();
-		TerrainOccluder.invalidate();
+		terrainOccluder.invalidate();
 		visibleRegionCount = 0;
 	}
 
@@ -166,6 +168,7 @@ public class CanvasWorldRenderer {
 			regionBuilder = new RenderRegionBuilder();
 		}
 
+		DitherTexture.instance().initializeIfNeeded();
 		world = clientWorld;
 		visibleRegionCount = 0;
 		renderRegionStorage.clear();
@@ -253,23 +256,23 @@ public class CanvasWorldRenderer {
 
 			final int newRegionDataVersion = regionDataVersion.get();
 
-			if (state == TerrainIterator.IDLE && (newRegionDataVersion != lastRegionDataVersion || viewVersion != frustum.viewVersion() || occluderVersion != TerrainOccluder.version())) {
+			if (state == TerrainIterator.IDLE && (newRegionDataVersion != lastRegionDataVersion || viewVersion != frustum.viewVersion() || occluderVersion != terrainOccluder.version())) {
 				viewVersion = frustum.viewVersion();
-				occluderVersion = TerrainOccluder.version();
+				occluderVersion = terrainOccluder.version();
 				lastRegionDataVersion = newRegionDataVersion;
-				TerrainOccluder.prepareScene(camera, frustum, renderRegionStorage.regionVersion());
+				terrainOccluder.prepareScene(camera, frustum, renderRegionStorage.regionVersion());
 				terrainIterator.prepare(cameraRegion, cameraBlockPos, frustum, renderDistance);
 				regionBuilder.executor.execute(terrainIterator, -1);
 			}
 		} else {
 			final int newRegionDataVersion = regionDataVersion.get();
 
-			if (newRegionDataVersion != lastRegionDataVersion || viewVersion != frustum.viewVersion() || occluderVersion != TerrainOccluder.version()) {
+			if (newRegionDataVersion != lastRegionDataVersion || viewVersion != frustum.viewVersion() || occluderVersion != terrainOccluder.version()) {
 				viewVersion = frustum.viewVersion();
-				occluderVersion = TerrainOccluder.version();
+				occluderVersion = terrainOccluder.version();
 				lastRegionDataVersion = newRegionDataVersion;
 
-				TerrainOccluder.prepareScene(camera, frustum, renderRegionStorage.regionVersion());
+				terrainOccluder.prepareScene(camera, frustum, renderRegionStorage.regionVersion());
 				terrainIterator.prepare(cameraRegion, cameraBlockPos, frustum, renderDistance);
 				terrainIterator.accept(null);
 
@@ -374,6 +377,7 @@ public class CanvasWorldRenderer {
 		profiler.swap("terrain_setup");
 
 		setupTerrain(camera, wr.canvas_getAndIncrementFrameIndex(), mc.player.isSpectator());
+		LitematicaHolder.litematicaTerrainSetup.accept(frustum);
 
 		profiler.swap("updatechunks");
 		final int maxFps = mc.options.maxFps;
@@ -406,6 +410,8 @@ public class CanvasWorldRenderer {
 			CanvasFrameBufferHacks.applyBloom();
 		}
 
+		LitematicaHolder.litematicaRenderSolids.accept(matrixStack);
+
 		if (this.world.getSkyProperties().isDarkened()) {
 			DiffuseLighting.enableForLevel(matrixStack.peek().getModel());
 		} else {
@@ -413,6 +419,7 @@ public class CanvasWorldRenderer {
 		}
 
 		profiler.swap("entities");
+		SatinHolder.beforeEntitiesRenderEvent.beforeEntitiesRender(camera, frustum, tickDelta);
 		profiler.push("prepare");
 		int entityCount = 0;
 		final int blockEntityCount = 0;
@@ -481,6 +488,9 @@ public class CanvasWorldRenderer {
 		immediate.draw(RenderLayer.getEntityCutout(SpriteAtlasTexture.BLOCK_ATLAS_TEX));
 		immediate.draw(RenderLayer.getEntityCutoutNoCull(SpriteAtlasTexture.BLOCK_ATLAS_TEX));
 		immediate.draw(RenderLayer.getEntitySmoothCutout(SpriteAtlasTexture.BLOCK_ATLAS_TEX));
+
+		SatinHolder.onEntitiesRenderedEvent.onEntitiesRendered(camera, frustum, tickDelta);
+		LitematicaHolder.litematicaEntityHandler.handle(matrixStack, tickDelta);
 
 		profiler.swap("blockentities");
 
@@ -597,7 +607,6 @@ public class CanvasWorldRenderer {
 		mc.debugRenderer.render(matrixStack, immediate, cameraX, cameraY, cameraZ);
 		RenderSystem.popMatrix();
 
-
 		immediate.draw(TexturedRenderLayers.getEntityTranslucentCull());
 		immediate.draw(TexturedRenderLayers.getBannerPatterns());
 		immediate.draw(TexturedRenderLayers.getShieldPatterns());
@@ -618,6 +627,7 @@ public class CanvasWorldRenderer {
 
 			profiler.swap("translucent");
 			renderTerrainLayer(true, matrixStack, cameraX, cameraY, cameraZ);
+			LitematicaHolder.litematicaRenderTranslucent.accept(matrixStack);
 
 			fb = mcwr.getParticlesFramebuffer();
 			fb.clear(MinecraftClient.IS_SYSTEM_MAC);
@@ -631,6 +641,7 @@ public class CanvasWorldRenderer {
 		}  else  {
 			profiler.swap("translucent");
 			renderTerrainLayer(true, matrixStack, cameraX, cameraY, cameraZ);
+			LitematicaHolder.litematicaRenderTranslucent.accept(matrixStack);
 
 			profiler.swap("particles");
 			mc.particleManager.renderParticles(matrixStack, immediate, lightmapTextureManager, camera, tickDelta);
@@ -675,6 +686,9 @@ public class CanvasWorldRenderer {
 			wr.canvas_renderWorldBorder(camera);
 			RenderSystem.depthMask(true);
 		}
+
+		MaliLibHolder.litematicaRenderWorldLast.render(matrixStack, mc, tickDelta);
+		SatinHolder.onWorldRenderedEvent.onWorldRendered(matrixStack, camera, tickDelta, limitTime);
 
 		if (Configurator.enableBufferDebug) {
 			BufferDebug.render();
@@ -867,6 +881,7 @@ public class CanvasWorldRenderer {
 
 		if (Configurator.hdLightmaps()) {
 			LightmapHdTexture.instance().disable();
+			DitherTexture.instance().disable();
 		}
 
 		VboBuffer.unbind();
@@ -960,4 +975,88 @@ public class CanvasWorldRenderer {
 	public void updateNoCullingBlockEntities(ObjectOpenHashSet<BlockEntity> removedBlockEntities, ObjectOpenHashSet<BlockEntity> addedBlockEntities) {
 		((WorldRenderer) wr).updateNoCullingBlockEntities(removedBlockEntities, addedBlockEntities);
 	}
+
+	// PERF: stash frustum version and terrain version in entity - only retest when changed
+	public <T extends Entity> boolean isEntityVisible(T entity) {
+		final Box box = entity.getVisibilityBoundingBox();
+
+		final double x0, y0, z0, x1, y1, z1;
+
+		// NB: this method is mis-named
+		if (box.isValid()) {
+			x0 = entity.getX() - 1.5;
+			y0 = entity.getY() - 1.5;
+			z0 = entity.getZ() - 1.5;
+			x1 = x0 + 3.0;
+			y1 = y0 + 3.0;
+			z1 = z0 + 3.0;
+		} else {
+			x0 = box.minX;
+			y0 = box.minY;
+			z0 = box.minZ;
+			x1 = box.maxX;
+			y1 = box.maxY;
+			z1 = box.maxZ;
+		}
+
+		if (!frustum.isVisible(x0 - 0.5, y0 - 0.5, z0 - 0.5, x1 + 0.5, y1 + 0.5, z1 + 0.5)) {
+			return false;
+		}
+
+		final int rx0 = MathHelper.floor(x0) & 0xFFFFFFF0;
+		final int ry0 = MathHelper.floor(y0) & 0xFFFFFFF0;
+		final int rz0 = MathHelper.floor(z0) & 0xFFFFFFF0;
+		final int rx1 = MathHelper.floor(x1) & 0xFFFFFFF0;
+		final int ry1 = MathHelper.floor(y1) & 0xFFFFFFF0;
+		final int rz1 = MathHelper.floor(z1) & 0xFFFFFFF0;
+
+		int flags = rx0 == rz1 ? 0 : 1;
+		if (ry0 != ry1) flags |= 2;
+		if (rz0 != rz1) flags |= 4;
+
+		final RenderRegionStorage regions = renderRegionStorage;
+
+		switch (flags) {
+		case 0b000:
+			return regions.wasSeen(rx0, ry0, rz0);
+
+		case 0b001:
+			return regions.wasSeen(rx0, ry0, rz0) || regions.wasSeen(rx1, ry0, rz0);
+
+		case 0b010:
+			return regions.wasSeen(rx0, ry0, rz0) || regions.wasSeen(rx0, ry1, rz0);
+
+		case 0b011:
+			return regions.wasSeen(rx0, ry0, rz0) || regions.wasSeen(rx1, ry0, rz0)
+					|| regions.wasSeen(rx0, ry1, rz0) || regions.wasSeen(rx1, ry1, rz0);
+
+		case 0b100:
+			return regions.wasSeen(rx0, ry0, rz0) || regions.wasSeen(rx0, ry0, rz1);
+
+		case 0b101:
+			return regions.wasSeen(rx0, ry0, rz0) || regions.wasSeen(rx1, ry0, rz0)
+					|| regions.wasSeen(rx0, ry0, rz1) || regions.wasSeen(rx1, ry0, rz1);
+
+		case 0b110:
+			return regions.wasSeen(rx0, ry0, rz0) || regions.wasSeen(rx0, ry1, rz0)
+					|| regions.wasSeen(rx0, ry0, rz1) || regions.wasSeen(rx0, ry1, rz1);
+
+		case 0b111:
+			return regions.wasSeen(rx0, ry0, rz0) || regions.wasSeen(rx1, ry0, rz0)
+					|| regions.wasSeen(rx0, ry1, rz0) || regions.wasSeen(rx1, ry1, rz0)
+					|| regions.wasSeen(rx0, ry0, rz1) || regions.wasSeen(rx1, ry0, rz1)
+					|| regions.wasSeen(rx0, ry1, rz1) || regions.wasSeen(rx1, ry1, rz1);
+		}
+
+		return true;
+	}
+
+
+	private static CanvasWorldRenderer instance;
+
+	public static CanvasWorldRenderer instance() {
+		return instance;
+	}
+
+	public static final int MAX_REGION_COUNT = (32 * 2 + 1) * (32 * 2 + 1) * 16;
 }

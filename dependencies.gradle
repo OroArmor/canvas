@@ -7,12 +7,8 @@ mavenLocal()
     	url "https://maven.fabricmc.net/"
 	}
  	maven {
-    	name = "grondag"
-    	url = "https://grondag-repo.appspot.com"
-    	credentials {
-            username "guest"
-            password ""
-		}
+    	name = "dblsaiko"
+    	url = "https://maven.dblsaiko.net/"
     }
     maven {
       name = "Cotton"
@@ -21,6 +17,10 @@ mavenLocal()
 	maven {
 		name = "CurseForge"
 		url = "https://minecraft.curseforge.com/api/maven"
+	}
+	maven {
+		name = "JitPack"
+		url = "https://jitpack.io"
 	}
 }
 
@@ -78,4 +78,9 @@ dependencies {
   		include "grondag:joml-mod:1.0+"
 		include "blue.endless:jankson:1.1.2"
  	}
+ 	
+ 	modApi ("com.github.Ladysnake:Satin:${satin_version}") {
+    	transitive = false
+    }
+ 	
 }

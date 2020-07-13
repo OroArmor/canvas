@@ -1,5 +1,5 @@
 plugins {
-	id "fabric-loom" version "0.2.7-SNAPSHOT"
+	id "fabric-loom" version "0.4-SNAPSHOT"
 	id "eclipse"
 	id "maven-publish"
 	id "com.github.breadmoirai.github-release" version "2.2.9"
@@ -137,6 +137,17 @@ publishing {
 				}
 				if (project.hasProperty('maven_password')){
 					password = project.getProperty('maven_password')
+				}
+			}
+        }
+        maven {
+            url 'sftp://dblsaiko.net:22/srv/http/maven/'
+            credentials {
+				if (project.hasProperty('maven_user_2')){
+					username = project.getProperty('maven_user_2')
+				}
+				if (project.hasProperty('maven_password_2')){
+					password = project.getProperty('maven_password_2')
 				}
 			}
         }
